@@ -1,0 +1,1 @@
+{"customizations":{"vscode":{"extensions":["dbaeumer.vscode-eslint"]}},"forwardPorts":[5173],"image":"mcr.microsoft.com/devcontainers/typescript-node:24","name":"school-bus-router (light)","portsAttributes":{"5173":{"label":"Vite dev server"}},"postCreateCommand":"npm install"}
