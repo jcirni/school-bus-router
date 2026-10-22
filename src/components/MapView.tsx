@@ -40,7 +40,7 @@ export default function MapView({ geometry, stops, depot, center, gridLines }: P
     const pts: L.LatLngExpression[] = []
     for (const line of gridLines ?? []) {
       const ll = line.points.map((p) => [p.lat, p.lng] as L.LatLngExpression)
-      L.polyline(ll, { color: '#9aa3ad', weight: 5, opacity: 0.55 }).addTo(layer).bindTooltip(line.name)
+      L.polyline(ll, { color: '#4b5563', weight: 5, opacity: 0.85 }).addTo(layer).bindTooltip(line.name)
     }
     if (depot.lat !== undefined && depot.lng !== undefined) {
       L.circleMarker([depot.lat, depot.lng], { color: '#b3001b', radius: 7 }).addTo(layer).bindTooltip('School')
