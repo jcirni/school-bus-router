@@ -490,7 +490,8 @@ export default function App() {
             </p>
             {result && result.rideViolations.length > 0 && (
               <p className="notice">
-                ⚠ <b>{PROFILE_LABELS[result.profile]}</b> puts {result.rideViolations.length} stops over
+                ⚠ <b>{PROFILE_LABELS[result.profile]}</b> puts {result.rideViolations.length}{' '}
+                {result.rideViolations.length === 1 ? 'stop' : 'stops'} over
                 the {route.settings.maxRideMinutes}-minute max ride: {result.rideViolations.join(', ')}.
                 One bus serving all {route.stops.length} stops cannot get the first riders to school in
                 time.{' '}
