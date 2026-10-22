@@ -7,7 +7,8 @@ import { buildGraph, buildGridNetwork } from './lib/graph'
 import { WALK_LIMIT_MI, proposeGroups, type GroupProposal } from './lib/grouping'
 import { runRoute } from './lib/pipeline'
 import { parseProject, serializeProject, shareableExport } from './lib/project'
-import { emptyWorkspace, sampleWorkspace } from './lib/sample'
+import { SAMPLE_CENTER, emptyWorkspace, sampleStreetLines, sampleWorkspace } from './lib/sample'
+import { splitStopsInTwo } from './lib/split'
 import type { BusRoute, ProfileId, Stop, Workspace } from './lib/types'
 import { DEFAULT_SETTINGS } from './lib/types'
 
@@ -27,6 +28,16 @@ function download(name: string, text: string) {
 
 const fmt = (n: number, digits = 1) => n.toFixed(digits)
 
+// "06:45" + minutes -> "7:32 AM"
+function fmtClock(departure: string, addMin: number): string {
+  const [h, m] = departure.split(':').map(Number)
+  const total = ((h * 60 + m + Math.round(addMin)) % 1440 + 1440) % 1440
+  const hh = Math.floor(total / 60)
+  const suffix = hh >= 12 ? 'PM' : 'AM'
+  const h12 = hh % 12 === 0 ? 12 : hh % 12
+  return `${h12}:${String(total % 60).padStart(2, '0')} ${suffix}`
+}
+
 export default function App() {
   const [ws, setWs] = useState<Workspace>(() => emptyWorkspace())
   const [routeId, setRouteId] = useState('R1')
@@ -35,6 +46,7 @@ export default function App() {
   const [proposals, setProposals] = useState<GroupProposal[]>([])
   const [accepted, setAccepted] = useState<string[]>([])
   const [profile, setProfile] = useState<ProfileId>('fastest')
+  const [sampleMode, setSampleMode] = useState(false)
   const projectFileRef = useRef<HTMLInputElement>(null)
 
   const route = ws.routes.find((r) => r.id === routeId) ?? ws.routes[0]
@@ -66,6 +78,7 @@ export default function App() {
   if (!route) return <p>No routes. Reload the page.</p>
 
   const onImport = (r: ImportResult) => {
+    setSampleMode(false)
     setImportInfo(r)
     setProposals([])
     setAccepted([])
@@ -74,13 +87,47 @@ export default function App() {
   }
 
   const onSample = () => {
+    if (route.stops.length > 0 && !window.confirm('Load the sample data? It replaces the current workspace.')) return
     const sample = sampleWorkspace()
     setWs(sample)
     setRouteId(sample.routes[0].id)
+    setSampleMode(true)
     setImportInfo(null)
     setProposals([])
     setAccepted([])
-    setStatus('Sample data loaded — 40 fake stops with coordinates, no network needed.')
+    setStatus(
+      'Sample data loaded — Maplewood is a fictional town: 40 fake stops on a model street grid, split into two routes of 20 so one bus can finish within the 60-minute max ride. No network needed.',
+    )
+  }
+
+  const splitRoute = () => {
+    const [a, b] = splitStopsInTwo(route.stops)
+    if (!b.length) {
+      setStatus('Could not split this route — too few located stops.')
+      return
+    }
+    const centroidLng = (g: Stop[]) =>
+      g.reduce((sum, s) => sum + (s.lng ?? 0), 0) / Math.max(g.length, 1)
+    const [westG, eastG] = centroidLng(a) <= centroidLng(b) ? [a, b] : [b, a]
+    const mk = (suffix: string, stops: Stop[], id: string): BusRoute => ({
+      id,
+      name: `${route.name} — ${suffix}`,
+      settings: { ...route.settings },
+      stops,
+      versions: [],
+    })
+    setWs((w) => ({
+      ...w,
+      routes: w.routes.flatMap((r) =>
+        r.id === route.id ? [mk('West', westG, `${route.id}-W`), mk('East', eastG, `${route.id}-E`)] : [r],
+      ),
+    }))
+    setRouteId(`${route.id}-W`)
+    setProposals([])
+    setAccepted([])
+    setStatus(
+      `Split into two routes (${westG.length} west / ${eastG.length} east stops). Optimize each route to check its ride times.`,
+    )
   }
 
   const geocode = async () => {
@@ -209,6 +256,7 @@ export default function App() {
             if (!f) return
             try {
               const parsed = parseProject(await f.text())
+              setSampleMode(false)
               setWs(parsed)
               setRouteId(parsed.routes[0]?.id ?? '')
               setStatus('Project loaded and redrawn from file — no geocoding or server needed.')
@@ -252,7 +300,8 @@ export default function App() {
               }}
             >
               Propose grouped stops
-            </button>
+            </button>{' '}
+            <span className="hint">Walk limit comes from the Level setting in step 3.</span>
           </p>
           {proposals.map((p) => (
             <p key={p.id} className="group-row">
@@ -338,6 +387,19 @@ export default function App() {
               />
             </label>
             <label>
+              Fuel $/gal{' '}
+              <input
+                type="number"
+                min={0}
+                max={20}
+                step={0.1}
+                value={route.settings.fuelPrice}
+                onChange={(e) =>
+                  updateRoute(route.id, (o) => ({ ...o, settings: { ...o.settings, fuelPrice: Number(e.target.value) || 4 } }))
+                }
+              />
+            </label>
+            <label>
               Max ride (min){' '}
               <input
                 type="number"
@@ -380,24 +442,61 @@ export default function App() {
                     Max ride {fmt(v.scorecard.maxRideMin)} min · Avg {fmt(v.scorecard.avgRideMin)} min
                   </span>
                   {v.rideViolations.length > 0 && (
-                    <span className="warn">⚠ Ride time over limit: {v.rideViolations.join(', ')}</span>
+                    <span className="warn">⚠ {v.rideViolations.length} stops over the ride limit</span>
                   )}
+                  {v.profile === profile && <span>● Shown on map &amp; driver sheet below</span>}
                 </button>
               ))}
             </div>
+            <p className="hint">
+              Assumptions: fuel priced at ${fmt(route.settings.fuelPrice, 2)}/gal (change in step 3);
+              CO₂ at 10.21 kg per gallon of diesel; {fmt(route.settings.dwellMinutes)} min loading time
+              per stop. Max ride is a policy target the optimizer reports against — it is not
+              automatic. If every profile is over, the usual fix is a second bus:
+            </p>
+            {result && result.rideViolations.length > 0 && (
+              <p className="notice">
+                ⚠ <b>{PROFILE_LABELS[result.profile]}</b> puts {result.rideViolations.length} stops over
+                the {route.settings.maxRideMinutes}-minute max ride: {result.rideViolations.join(', ')}.
+                One bus serving all {route.stops.length} stops cannot get the first riders to school in
+                time.{' '}
+                <button onClick={splitRoute}>Split stops into 2 routes</button>
+              </p>
+            )}
             {result && (
               <>
-                <MapView geometry={result.geometry} stops={effectiveStops} depot={ws.depot} />
+                <MapView
+                  geometry={result.geometry}
+                  stops={effectiveStops}
+                  depot={ws.depot}
+                  center={sampleMode ? SAMPLE_CENTER : undefined}
+                  gridLines={sampleMode ? sampleStreetLines() : undefined}
+                />
+                {sampleMode && (
+                  <p className="hint">
+                    Maplewood is fictional: the gray streets are the model street grid the sample
+                    routes drive on. They sit on top of a real basemap (Kent/Covington, WA) and do
+                    not line up with its streets — real-road routing arrives with the real street
+                    network in the next phase.
+                  </p>
+                )}
                 <h3>Stop order — {PROFILE_LABELS[result.profile]} (driver sheet)</h3>
                 <ol>
                   <li>
-                    <b>Start:</b> {ws.depot.street || 'School'} ({route.settings.departureTime})
+                    <b>Start:</b> {ws.depot.street || 'School'} — depart{' '}
+                    {fmtClock(route.settings.departureTime, 0)}
                   </li>
-                  {result.order.map((id) => (
-                    <li key={id}>{stopById.get(id)?.street ?? id}</li>
+                  {result.order.map((id, i) => (
+                    <li key={id}>
+                      <b>{id}</b> · {stopById.get(id)?.street ?? id}
+                      {result.stopTimesMin && (
+                        <> · {fmtClock(route.settings.departureTime, result.stopTimesMin[i])}</>
+                      )}
+                    </li>
                   ))}
                   <li>
-                    <b>Return:</b> {ws.depot.street || 'School'}
+                    <b>Return:</b> {ws.depot.street || 'School'} — arrive{' '}
+                    {fmtClock(route.settings.departureTime, result.scorecard.totalTimeMin)}
                   </li>
                 </ol>
                 <button

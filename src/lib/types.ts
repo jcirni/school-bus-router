@@ -49,6 +49,8 @@ export interface Scorecard {
 export interface RouteResult {
   profile: ProfileId
   order: string[]
+  // minutes after departure when the bus reaches each stop, aligned with order
+  stopTimesMin?: number[]
   geometry: LatLng[]
   scorecard: Scorecard
   rideViolations: string[]

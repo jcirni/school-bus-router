@@ -34,6 +34,7 @@ export function runRoute(graph: Graph, depot: LatLng, stops: Stop[], settings: R
     return {
       profile,
       order: solved.order.map((i) => located[i - 1].id),
+      stopTimesMin: solved.order.map((i) => solved.arrivalMin.get(i) ?? 0),
       geometry: routed?.geometry ?? orderedPoints,
       scorecard,
       rideViolations: solved.violations.map((i) => located[i - 1].id),

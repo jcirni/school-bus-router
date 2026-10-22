@@ -17,10 +17,11 @@ describe('project file', () => {
 })
 
 describe('sample data + pipeline', () => {
-  it('ships 40 fake stops with coordinates', () => {
+  it('ships 40 fake stops with coordinates across two routes', () => {
     const ws = sampleWorkspace()
-    expect(ws.routes[0].stops).toHaveLength(40)
-    expect(ws.routes[0].stops.every((s) => s.lat !== undefined && s.lng !== undefined)).toBe(true)
+    const stops = ws.routes.flatMap((r) => r.stops)
+    expect(stops).toHaveLength(40)
+    expect(stops.every((s) => s.lat !== undefined && s.lng !== undefined)).toBe(true)
   })
   it('runs all three profiles fully offline on the sample grid', () => {
     const ws = sampleWorkspace()
@@ -31,8 +32,8 @@ describe('sample data + pipeline', () => {
     const results = runRoute(graph, ws.depot as { lat: number; lng: number }, route.stops, route.settings)
     expect(results.map((r) => r.profile)).toEqual(['fastest', 'fuel', 'safest'])
     for (const r of results) {
-      expect(r.order).toHaveLength(40)
-      expect(new Set(r.order).size).toBe(40)
+      expect(r.order).toHaveLength(20)
+      expect(new Set(r.order).size).toBe(20)
       expect(r.scorecard.totalDistanceMi).toBeGreaterThan(0)
       expect(r.scorecard.totalTimeMin).toBeGreaterThan(0)
       expect(r.geometry.length).toBeGreaterThan(40)

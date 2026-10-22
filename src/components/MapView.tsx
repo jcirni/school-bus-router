@@ -7,22 +7,29 @@ interface Props {
   geometry: LatLng[]
   stops: Stop[]
   depot: Stop
+  center?: LatLng
+  // model streets (sample data) drawn under the route so it visibly follows roads
+  gridLines?: { name: string; points: LatLng[] }[]
 }
 
 // Leaflet with circle markers (avoids bundler icon-asset issues); tiles need network, route draws offline
-export default function MapView({ geometry, stops, depot }: Props) {
+export default function MapView({ geometry, stops, depot, center, gridLines }: Props) {
   const divRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
   const layerRef = useRef<L.LayerGroup | null>(null)
 
   useEffect(() => {
     if (!divRef.current || mapRef.current) return
-    const map = L.map(divRef.current).setView([47.45, -122.3], 12)
+    const map = L.map(divRef.current).setView(
+      center ? [center.lat, center.lng] : [47.45, -122.3],
+      13,
+    )
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '© OpenStreetMap contributors',
     }).addTo(map)
     mapRef.current = map
     layerRef.current = L.layerGroup().addTo(map)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -31,6 +38,10 @@ export default function MapView({ geometry, stops, depot }: Props) {
     if (!layer || !map) return
     layer.clearLayers()
     const pts: L.LatLngExpression[] = []
+    for (const line of gridLines ?? []) {
+      const ll = line.points.map((p) => [p.lat, p.lng] as L.LatLngExpression)
+      L.polyline(ll, { color: '#9aa3ad', weight: 5, opacity: 0.55 }).addTo(layer).bindTooltip(line.name)
+    }
     if (depot.lat !== undefined && depot.lng !== undefined) {
       L.circleMarker([depot.lat, depot.lng], { color: '#b3001b', radius: 7 }).addTo(layer).bindTooltip('School')
       pts.push([depot.lat, depot.lng])
@@ -46,7 +57,7 @@ export default function MapView({ geometry, stops, depot }: Props) {
       pts.push(...line)
     }
     if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.1))
-  }, [geometry, stops, depot])
+  }, [geometry, stops, depot, gridLines])
 
   return <div ref={divRef} style={{ height: 380, width: '100%' }} />
 }

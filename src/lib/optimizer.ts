@@ -28,6 +28,8 @@ export interface SolveResult {
   totalTimeMin: number
   totalDistanceMi: number
   rideTimesMin: Map<number, number>
+  // minutes after departure when the bus reaches each stop (matrix index)
+  arrivalMin: Map<number, number>
   violations: number[]
 }
 
@@ -105,5 +107,5 @@ export function solveRoute(m: Matrix, opts: SolveOptions): SolveResult {
     if (rideMin > opts.maxRideMinutes) violations.push(s)
   }
 
-  return { order, cost: tourCost([0, ...order, 0]), totalTimeMin, totalDistanceMi, rideTimesMin, violations }
+  return { order, cost: tourCost([0, ...order, 0]), totalTimeMin, totalDistanceMi, rideTimesMin, arrivalMin: arrival, violations }
 }
