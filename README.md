@@ -13,10 +13,13 @@ options scored on time, fuel, and safety. Phase 1 runs entirely in the browser.
   workspace lives in the browser tab; export a project file to keep it.
 - **Routing is local-only.** Stop coordinates are **never** sent to public
   routing servers (including the public Valhalla demo server). Routes are
-  computed in your browser on a locally built road graph.
-- **The only external call is the US Census geocoder** — and only when you
-  click "Geocode". Address text goes to census.gov (a US federal service, free,
-  no key) to become coordinates. Map tiles, if loaded, are downloads only.
+  computed in your browser on a road graph built locally.
+- **External calls are downloads, plus the geocoder.** Optimizing downloads
+  the OpenStreetMap street network for your stops' area from the Overpass
+  API — the request contains only a bounding box (the same area your map
+  tiles already display), never your stop list or addresses. The US Census
+  geocoder is called only when you click "Geocode". Address text goes to
+  census.gov (a US federal service, free, no key) to become coordinates.
 
 ## What it does
 
@@ -30,8 +33,12 @@ options scored on time, fuel, and safety. Phase 1 runs entirely in the browser.
 3. **Group stops (optional)** — proposes grouped stops within a max walk of
    0.25 mi (elementary) or 0.5 mi (older students); stops in different arterial
    zones are never grouped together. You accept or reject each proposal.
-4. **Optimize** — a local solver (nearest neighbor + 2-opt) orders the stops
-   from and back to the school, separately for AM pickup and PM drop-off.
+4. **Optimize** — the app downloads the real OpenStreetMap street network
+   for the stop area (drivable roads only, one-ways honored, posted speed
+   limits where mapped) and a local solver (nearest neighbor + 2-opt) orders
+   the stops from and back to the school on those streets, separately for AM
+   pickup and PM drop-off. If the download fails (offline, very large area),
+   it falls back to a street-grid model and says so.
 5. **Compare three profiles** — Fastest, Lowest Fuel, and Safest / Right-Turn —
    each with a scorecard: total time, miles, estimated fuel gallons + cost, CO₂,
    left/U-turn counts, and max/average student ride time, with violations of
@@ -45,10 +52,12 @@ options scored on time, fuel, and safety. Phase 1 runs entirely in the browser.
 
 ## Known Phase 1 simplifications
 
-- The in-browser road network is a **street-grid model** built over the stop
-  area (with a one-way avenue and an arterial), not a downloaded OpenStreetMap
-  extract. It proves the local-routing pipeline; real OSM graph loading is the
-  next step. Treat Phase 1 routes as planning estimates.
+- The road network is downloaded live from OpenStreetMap (Overpass API) per
+  area and cached only in the tab; very large areas (>~400 sq mi) and
+  offline use fall back to a **street-grid model** built over the stop area,
+  and the app says which network a run used. Speeds come from OSM `maxspeed`
+  tags where present, otherwise a per-road-class default. Turn-by-turn
+  directions text is not generated yet.
 - The solver is a strong heuristic, not a proof of optimality.
 - One bus per route in the solver; a manual "split stops into 2 routes"
   action covers the common second-bus case. Optimized multi-bus splitting is

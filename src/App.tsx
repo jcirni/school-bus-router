@@ -3,7 +3,8 @@ import ImportPanel from './components/ImportPanel'
 import MapView from './components/MapView'
 import type { ImportResult } from './lib/importer'
 import { geocodeBatch } from './lib/geocoder'
-import { buildGraph, buildGridNetwork } from './lib/graph'
+import { buildGraph, buildGridNetwork, type Graph } from './lib/graph'
+import { bboxAreaSqMi, bboxForPoints, fetchOsmNetwork } from './lib/osm'
 import { WALK_LIMIT_MI, proposeGroups, type GroupProposal } from './lib/grouping'
 import { runRoute } from './lib/pipeline'
 import { parseProject, serializeProject, shareableExport } from './lib/project'
@@ -47,6 +48,9 @@ export default function App() {
   const [accepted, setAccepted] = useState<string[]>([])
   const [profile, setProfile] = useState<ProfileId>('fastest')
   const [sampleMode, setSampleMode] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [networkSource, setNetworkSource] = useState<'osm' | 'grid' | null>(null)
+  const netCacheRef = useRef<{ key: string; graph: Graph } | null>(null)
   const projectFileRef = useRef<HTMLInputElement>(null)
 
   const route = ws.routes.find((r) => r.id === routeId) ?? ws.routes[0]
@@ -154,7 +158,7 @@ export default function App() {
     )
   }
 
-  const optimize = () => {
+  const optimize = async () => {
     if (ws.depot.lat === undefined || ws.depot.lng === undefined) {
       setStatus('The school/depot has no coordinates yet — load the sample data, or geocode a depot address first.')
       return
@@ -168,11 +172,40 @@ export default function App() {
       { lat: ws.depot.lat, lng: ws.depot.lng },
       ...located.map((s) => ({ lat: s.lat!, lng: s.lng! })),
     ]
-    const net = buildGridNetwork(pts)
-    const graph = buildGraph(net.nodes, net.segments)
-    const versions = runRoute(graph, { lat: ws.depot.lat, lng: ws.depot.lng }, effectiveStops, route.settings)
-    updateRoute(route.id, (old) => ({ ...old, versions }))
-    setStatus('Optimized locally on a street-grid model — no coordinates were sent to any routing server.')
+    setBusy(true)
+    try {
+      // real streets: download the OpenStreetMap network for this area box.
+      // Only the box leaves the browser (like map tiles); the stop list does not.
+      const bbox = bboxForPoints(pts)
+      if (bboxAreaSqMi(bbox) > 400) throw new Error('Stop area too large for one download')
+      const key = [bbox.south, bbox.west, bbox.north, bbox.east].map((n) => n.toFixed(3)).join(',')
+      let graph = netCacheRef.current?.key === key ? netCacheRef.current.graph : null
+      let intersections = 0
+      if (!graph) {
+        setStatus('Downloading the real street network from OpenStreetMap for this area…')
+        const net = await fetchOsmNetwork((url, init) => fetch(url, init), pts)
+        graph = buildGraph(net.nodes, net.segments)
+        intersections = net.nodes.length
+        netCacheRef.current = { key, graph }
+      }
+      const versions = runRoute(graph, { lat: ws.depot.lat, lng: ws.depot.lng }, effectiveStops, route.settings)
+      updateRoute(route.id, (old) => ({ ...old, versions }))
+      setNetworkSource('osm')
+      setStatus(
+        `Optimized on real OpenStreetMap streets${intersections ? ` (${intersections.toLocaleString()} intersections downloaded for this area)` : ''}. Routes follow actual roads, one-ways, and posted speed limits where OpenStreetMap has them.`,
+      )
+    } catch {
+      const net = buildGridNetwork(pts)
+      const graph = buildGraph(net.nodes, net.segments)
+      const versions = runRoute(graph, { lat: ws.depot.lat, lng: ws.depot.lng }, effectiveStops, route.settings)
+      updateRoute(route.id, (old) => ({ ...old, versions }))
+      setNetworkSource('grid')
+      setStatus(
+        'Could not download real streets (offline, or the stop area is very large), so this run used the street-grid model — treat times and distances as rough estimates.',
+      )
+    } finally {
+      setBusy(false)
+    }
   }
 
   const result = route.versions.find((v) => v.profile === profile)
@@ -184,8 +217,9 @@ export default function App() {
         <h1>🚌 Bus Router</h1>
         <p className="hint">
           Names are stripped at import. Nothing is stored on a server. Routing runs locally in your
-          browser — coordinates are never sent to a routing service. The only external call is the
-          Census geocoder, if you use it.
+          browser — coordinates are never sent to a routing service. External calls: the Census
+          geocoder (only when you click Geocode), and a download of OpenStreetMap street data for
+          your stops' area when you optimize — only the area box is requested, never your stop list.
         </p>
         <h3>Routes</h3>
         <ul className="routes">
@@ -412,8 +446,8 @@ export default function App() {
               />
             </label>
           </p>
-          <button className="primary" onClick={optimize}>
-            Optimize route
+          <button className="primary" onClick={() => void optimize()} disabled={busy}>
+            {busy ? 'Optimizing…' : 'Optimize route'}
           </button>
         </section>
 
@@ -470,14 +504,19 @@ export default function App() {
                   stops={effectiveStops}
                   depot={ws.depot}
                   center={sampleMode ? SAMPLE_CENTER : undefined}
-                  gridLines={sampleMode ? sampleStreetLines() : undefined}
+                  gridLines={sampleMode && networkSource !== 'osm' ? sampleStreetLines() : undefined}
                 />
-                {sampleMode && (
+                {sampleMode && networkSource !== 'osm' && (
                   <p className="hint">
-                    Maplewood is fictional: the gray streets are the model street grid the sample
-                    routes drive on. They sit on top of a real basemap (Kent/Covington, WA) and do
-                    not line up with its streets — real-road routing arrives with the real street
-                    network in the next phase.
+                    Maplewood is fictional: the gray streets are the model street grid. They sit on
+                    top of a real basemap (Kent/Covington, WA) and do not line up with its streets.
+                  </p>
+                )}
+                {sampleMode && networkSource === 'osm' && (
+                  <p className="hint">
+                    The sample stops are fictional points, but these routes follow the real
+                    OpenStreetMap streets beneath them — so the line now tracks actual roads
+                    instead of the fictional Maplewood grid.
                   </p>
                 )}
                 <h3>Stop order — {PROFILE_LABELS[result.profile]} (driver sheet)</h3>

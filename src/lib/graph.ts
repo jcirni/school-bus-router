@@ -51,39 +51,82 @@ export interface PathResult {
   timeMin: number
 }
 
-export function dijkstra(g: Graph, start: string, end: string): PathResult | null {
-  if (!g.nodes.has(start) || !g.nodes.has(end)) return null
-  const dist = new Map<string, number>([[start, 0]])
-  const time = new Map<string, number>([[start, 0]])
+export interface AllPaths {
+  distMi: Map<string, number>
+  timeMin: Map<string, number>
+  prev: Map<string, string>
+}
+
+// single-source shortest paths (by distance) to every reachable node;
+// binary heap so real street networks with tens of thousands of nodes stay fast
+export function dijkstraAll(g: Graph, start: string): AllPaths {
+  const distMi = new Map<string, number>([[start, 0]])
+  const timeMin = new Map<string, number>([[start, 0]])
   const prev = new Map<string, string>()
-  const open: [number, string][] = [[0, start]]
-  const settled = new Set<string>()
-  while (open.length) {
-    open.sort((a, b) => a[0] - b[0])
-    const [d, u] = open.shift()!
-    if (settled.has(u)) continue
-    settled.add(u)
-    if (u === end) break
+  const heap: [number, string][] = [[0, start]]
+  const push = (item: [number, string]) => {
+    heap.push(item)
+    let i = heap.length - 1
+    while (i > 0) {
+      const parent = (i - 1) >> 1
+      if (heap[parent][0] <= heap[i][0]) break
+      ;[heap[parent], heap[i]] = [heap[i], heap[parent]]
+      i = parent
+    }
+  }
+  const pop = (): [number, string] | undefined => {
+    const top = heap[0]
+    const last = heap.pop()!
+    if (heap.length) {
+      heap[0] = last
+      let i = 0
+      for (;;) {
+        const l = 2 * i + 1
+        const r = l + 1
+        let smallest = i
+        if (l < heap.length && heap[l][0] < heap[smallest][0]) smallest = l
+        if (r < heap.length && heap[r][0] < heap[smallest][0]) smallest = r
+        if (smallest === i) break
+        ;[heap[smallest], heap[i]] = [heap[i], heap[smallest]]
+        i = smallest
+      }
+    }
+    return top
+  }
+  while (heap.length) {
+    const [d, u] = pop()!
+    if (d > (distMi.get(u) ?? Infinity)) continue
     for (const e of g.adj.get(u) ?? []) {
       const nd = d + e.lengthMi
-      if (nd < (dist.get(e.to) ?? Infinity)) {
-        dist.set(e.to, nd)
-        time.set(e.to, (time.get(u) ?? 0) + e.timeMin)
+      if (nd < (distMi.get(e.to) ?? Infinity)) {
+        distMi.set(e.to, nd)
+        timeMin.set(e.to, (timeMin.get(u) ?? 0) + e.timeMin)
         prev.set(e.to, u)
-        open.push([nd, e.to])
+        push([nd, e.to])
       }
     }
   }
-  if (!settled.has(end) && start !== end) return null
+  return { distMi, timeMin, prev }
+}
+
+export function pathNodeIds(all: AllPaths, start: string, end: string): string[] | null {
+  if (!all.distMi.has(end)) return null
   const nodeIds: string[] = []
   let cur: string | undefined = end
   while (cur) {
     nodeIds.unshift(cur)
     if (cur === start) break
-    cur = prev.get(cur)
+    cur = all.prev.get(cur)
   }
-  if (nodeIds[0] !== start) return null
-  return { nodeIds, distanceMi: dist.get(end) ?? 0, timeMin: time.get(end) ?? 0 }
+  return nodeIds[0] === start ? nodeIds : null
+}
+
+export function dijkstra(g: Graph, start: string, end: string): PathResult | null {
+  if (!g.nodes.has(start) || !g.nodes.has(end)) return null
+  const all = dijkstraAll(g, start)
+  const nodeIds = pathNodeIds(all, start, end)
+  if (!nodeIds) return null
+  return { nodeIds, distanceMi: all.distMi.get(end) ?? 0, timeMin: all.timeMin.get(end) ?? 0 }
 }
 
 export function nearestNode(g: Graph, p: LatLng): RoadNode | null {
@@ -126,23 +169,28 @@ function countTurns(geometry: LatLng[], names: (string | undefined)[]): { left: 
   return { left, right, uturn }
 }
 
+function detailFromNodeIds(g: Graph, nodeIds: string[]): { geometry: LatLng[]; names: (string | undefined)[] } {
+  const geometry: LatLng[] = []
+  const names: (string | undefined)[] = []
+  for (let i = 0; i < nodeIds.length; i++) {
+    const n = g.nodes.get(nodeIds[i])!
+    geometry.push({ lat: n.lat, lng: n.lng })
+    if (i === 0) names.push(undefined)
+    else {
+      const e = (g.adj.get(nodeIds[i - 1]) ?? []).find((x) => x.to === nodeIds[i])
+      names.push(e?.name)
+    }
+  }
+  return { geometry, names }
+}
+
 export function routeLeg(g: Graph, a: LatLng, b: LatLng): LegResult | null {
   const na = nearestNode(g, a)
   const nb = nearestNode(g, b)
   if (!na || !nb) return null
   const path = dijkstra(g, na.id, nb.id)
   if (!path) return null
-  const geometry: LatLng[] = []
-  const names: (string | undefined)[] = []
-  for (let i = 0; i < path.nodeIds.length; i++) {
-    const n = g.nodes.get(path.nodeIds[i])!
-    geometry.push({ lat: n.lat, lng: n.lng })
-    if (i === 0) names.push(undefined)
-    else {
-      const e = (g.adj.get(path.nodeIds[i - 1]) ?? []).find((x) => x.to === path.nodeIds[i])
-      names.push(e?.name)
-    }
-  }
+  const { geometry, names } = detailFromNodeIds(g, path.nodeIds)
   if (a.lat !== na.lat || a.lng !== na.lng) {
     geometry.unshift({ lat: a.lat, lng: a.lng })
     names.unshift(undefined)
@@ -189,20 +237,29 @@ export interface Matrix {
   leftTurns: number[][]
 }
 
-// pairwise legs between all points; unreachable pairs fall back to a straight-line estimate
+// pairwise legs between all points, one single-source Dijkstra per point
+// (not one per pair) so real street networks stay tractable;
+// unreachable pairs fall back to a straight-line estimate
 export function buildMatrix(g: Graph, points: LatLng[]): Matrix {
   const n = points.length
   const timeMin = Array.from({ length: n }, () => new Array<number>(n).fill(0))
   const distanceMi = Array.from({ length: n }, () => new Array<number>(n).fill(0))
   const leftTurns = Array.from({ length: n }, () => new Array<number>(n).fill(0))
+  const snapped = points.map((p) => nearestNode(g, p))
   for (let i = 0; i < n; i++) {
+    const src = snapped[i]
+    if (!src) continue
+    const all = dijkstraAll(g, src.id)
     for (let j = 0; j < n; j++) {
       if (i === j) continue
-      const leg = routeLeg(g, points[i], points[j])
-      if (leg) {
-        timeMin[i][j] = leg.timeMin
-        distanceMi[i][j] = leg.distanceMi
-        leftTurns[i][j] = leg.leftTurns + leg.uTurns * 2
+      const dst = snapped[j]
+      const ids = dst ? pathNodeIds(all, src.id, dst.id) : null
+      if (ids && dst) {
+        timeMin[i][j] = all.timeMin.get(dst.id) ?? 0
+        distanceMi[i][j] = all.distMi.get(dst.id) ?? 0
+        const { geometry, names } = detailFromNodeIds(g, ids)
+        const t = countTurns(geometry, names)
+        leftTurns[i][j] = t.left + t.uturn * 2
       } else {
         const d = haversineMi(points[i], points[j])
         distanceMi[i][j] = d
